@@ -27,13 +27,6 @@ class Message
   BLOCK_QUOTE_PATTERN = /^-----\s*Original Message\s*----+$/
   SIG_PATTERN = /(^(- )*-- ?$)|(^\s*----------+\s*$)|(^\s*_________+\s*$)|(^\s*--~--~-)|(^\s*--\+\+\*\*==)/
 
-  GPG_SIGNED_START = "-----BEGIN PGP SIGNED MESSAGE-----"
-  GPG_SIGNED_END = "-----END PGP SIGNED MESSAGE-----"
-  GPG_START = "-----BEGIN PGP MESSAGE-----"
-  GPG_END = "-----END PGP MESSAGE-----"
-  GPG_SIG_START = "-----BEGIN PGP SIGNATURE-----"
-  GPG_SIG_END = "-----END PGP SIGNATURE-----"
-
   MAX_SIG_DISTANCE = 15 # lines from the end
   DEFAULT_SUBJECT = ""
   DEFAULT_SENDER = "(missing sender)"
@@ -414,19 +407,7 @@ private
       return
     end
 
-    ## this probably will never happen
-    if payload.header.content_type && payload.header.content_type.downcase == "application/pgp-signature"
-      warn_with_location "multipart/signed with payload content type #{payload.header.content_type}"
-      return
-    end
-
-    if signature.header.content_type && signature.header.content_type.downcase != "application/pgp-signature"
-      ## unknown signature type; just ignore.
-      #warn "multipart/signed with signature content type #{signature.header.content_type}"
-      return
-    end
-
-    [CryptoManager.verify(payload, signature), message_to_chunks(payload)].flatten.compact
+    return
   end
 
   def multipart_encrypted_to_chunks m
@@ -445,19 +426,8 @@ private
       warn_with_location "multipart/encrypted with payload content type #{payload.header.content_type}"
       return
     end
-
-    if control.header.content_type && control.header.content_type.downcase != "application/pgp-encrypted"
-      warn_with_location "multipart/encrypted with control content type #{signature.header.content_type}"
-      return
-    end
-
-    notice, sig, decryptedm = CryptoManager.decrypt payload
-    if decryptedm # managed to decrypt
-      children = message_to_chunks(decryptedm, true)
-      [notice, sig].compact + children
-    else
-      [notice]
-    end
+    
+    return
   end
 
   ## takes a RMail::Message, breaks it into Chunk:: classes.
@@ -507,28 +477,6 @@ private
         debug "no body for message/rfc822 enclosure; skipping"
         []
       end
-    elsif m.header.content_type && m.header.content_type.downcase == "application/pgp" && m.body
-      ## apparently some versions of Thunderbird generate encryped email that
-      ## does not follow RFC3156, e.g. messages with X-Enigmail-Version: 0.95.0
-      ## they have no MIME multipart and just set the body content type to
-      ## application/pgp. this handles that.
-      ##
-      ## TODO 1: unduplicate code between here and
-      ##         multipart_encrypted_to_chunks
-      ## TODO 2: this only tries to decrypt. it cannot handle inline PGP
-      notice, sig, decryptedm = CryptoManager.decrypt m.body
-      if decryptedm # managed to decrypt
-        children = message_to_chunks decryptedm, true
-        [notice, sig].compact + children
-      else
-        ## try inline pgp signed
-      	chunks = inline_gpg_to_chunks m.body, $encoding, (m.charset || $encoding)
-        if chunks
-          chunks
-        else
-          [notice]
-        end
-      end
     else
       filename =
         ## first, paw through the headers looking for a filename.
@@ -567,14 +515,8 @@ private
 
       ## otherwise, it's body text
       else
-        ## Decode the body, charset conversion will follow either in
-        ## inline_gpg_to_chunks (for inline GPG signed messages) or
-        ## a few lines below (messages without inline GPG)
+        ## Decode the body
         body = m.body ? m.decode : ""
-
-        ## Check for inline-PGP
-        chunks = inline_gpg_to_chunks body, $encoding, (m.charset || $encoding)
-        return chunks if chunks
 
         if m.body
           ## if there's no charset, use the current encoding as the charset.
@@ -587,73 +529,6 @@ private
 
         text_to_chunks(body.normalize_whitespace.split("\n"), encrypted)
       end
-    end
-  end
-
-  ## looks for gpg signed (but not encrypted) inline  messages inside the
-  ## message body (there is no extra header for inline GPG) or for encrypted
-  ## (and possible signed) inline GPG messages
-  def inline_gpg_to_chunks body, encoding_to, encoding_from
-    lines = body.split("\n")
-
-    # First case: Message is enclosed between
-    #
-    # -----BEGIN PGP SIGNED MESSAGE-----
-    # and
-    # -----END PGP SIGNED MESSAGE-----
-    #
-    # In some cases, END PGP SIGNED MESSAGE doesn't appear
-    # (and may leave strange -----BEGIN PGP SIGNATURE----- ?)
-    gpg = lines.between(GPG_SIGNED_START, GPG_SIGNED_END)
-    # between does not check if GPG_END actually exists
-    # Reference: http://permalink.gmane.org/gmane.mail.sup.devel/641
-    if !gpg.empty?
-      msg = RMail::Message.new
-      msg.body = gpg.join("\n")
-
-      body = body.transcode(encoding_to, encoding_from)
-      lines = body.split("\n")
-      sig = lines.between(GPG_SIGNED_START, GPG_SIG_START)
-      startidx = lines.index(GPG_SIGNED_START)
-      endidx = lines.index(GPG_SIG_END)
-      before = startidx != 0 ? lines[0 .. startidx-1] : []
-      after = endidx ? lines[endidx+1 .. lines.size] : []
-
-      # sig contains BEGIN PGP SIGNED MESSAGE and END PGP SIGNATURE, so
-      # we ditch them. sig may also contain the hash used by PGP (with a
-      # newline), so we also skip them
-      sig_start = sig[1].match(/^Hash:/) ? 3 : 1
-      sig_end = sig.size-2
-      payload = RMail::Message.new
-      payload.body = sig[sig_start, sig_end].join("\n")
-      return [text_to_chunks(before, false),
-              CryptoManager.verify(nil, msg, false),
-              message_to_chunks(payload),
-              text_to_chunks(after, false)].flatten.compact
-    end
-
-    # Second case: Message is encrypted
-
-    gpg = lines.between(GPG_START, GPG_END)
-    # between does not check if GPG_END actually exists
-    if !gpg.empty? && !lines.index(GPG_END).nil?
-      msg = RMail::Message.new
-      msg.body = gpg.join("\n")
-
-      startidx = lines.index(GPG_START)
-      before = startidx != 0 ? lines[0 .. startidx-1] : []
-      after = lines[lines.index(GPG_END)+1 .. lines.size]
-
-      notice, sig, decryptedm = CryptoManager.decrypt msg, true
-      chunks = if decryptedm # managed to decrypt
-        children = message_to_chunks(decryptedm, true)
-        [notice, sig].compact + children
-      else
-        [notice]
-      end
-      return [text_to_chunks(before, false),
-              chunks,
-              text_to_chunks(after, false)].flatten.compact
     end
   end
 

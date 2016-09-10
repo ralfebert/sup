@@ -56,18 +56,6 @@ Return value:
 	True if attachments are mentioned.
 EOS
 
-  HookManager.register "crypto-mode", <<EOS
-Modifies cryptography settings based on header and message content, before
-editing a new message. This can be used to set, for example, default cryptography
-settings.
-Variables:
-    header: a hash of headers. See 'signature' hook for documentation.
-    body: an array of lines of body text.
-    crypto_selector: the UI element that controls the current cryptography setting.
-Return value:
-     none
-EOS
-
   HookManager.register "sendmail", <<EOS
 Sends the given mail. If this hook doesn't exist, the sendmail command
 configured for the account is used.
@@ -155,16 +143,6 @@ EOS
       @account_user = @header["From"]
 
       add_selector @account_selector
-    end
-
-    @crypto_selector =
-      if CryptoManager.have_crypto?
-        HorizontalSelector.new "Crypto:", [:none] + CryptoManager::OUTGOING_MESSAGE_OPERATIONS.keys, ["None"] + CryptoManager::OUTGOING_MESSAGE_OPERATIONS.values
-      end
-    add_selector @crypto_selector if @crypto_selector
-
-    if @crypto_selector
-      HookManager.run "crypto-mode", :header => @header, :body => @body, :crypto_selector => @crypto_selector
     end
 
     super opts
@@ -281,7 +259,6 @@ EOS
     end
 
     handle_new_text @header, @body
-    rerun_crypto_selector_hook
     update
 
     @edited
@@ -369,12 +346,6 @@ EOS
   end
 
 protected
-
-  def rerun_crypto_selector_hook
-    if @crypto_selector && !@crypto_selector.changed_by_user
-      HookManager.run "crypto-mode", :header => @header, :body => @body, :crypto_selector => @crypto_selector
-    end
-  end
 
   def mime_encode string
     string = [string].pack('M') # basic quoted-printable
@@ -538,7 +509,7 @@ protected
       BufferManager.kill_buffer buffer
       BufferManager.flash "Message sent!"
       true
-    rescue SystemCallError, SendmailCommandFailed, CryptoManager::Error => e
+    rescue SystemCallError, SendmailCommandFailed => e
       warn "Problem sending mail: #{e.message}"
       BufferManager.flash "Problem sending mail: #{e.message}"
       false
@@ -571,19 +542,6 @@ protected
         a.body = a.body.fix_encoding! if a.body.kind_of? String
         m.add_part a
       end
-    end
-
-    ## do whatever crypto transformation is necessary
-    if @crypto_selector && @crypto_selector.val != :none
-      from_email = Person.from_address(@header["From"]).email
-      to_email = [@header["To"], @header["Cc"], @header["Bcc"]].flatten.compact.map { |p| Person.from_address(p).email }
-      if m.multipart?
-        m.each_part {|p| p = transfer_encode p}
-      else
-        m = transfer_encode m
-      end
-
-      m = CryptoManager.send @crypto_selector.val, from_email, to_email, m
     end
 
     ## finally, set the top-level headers
@@ -660,7 +618,6 @@ protected
           @account_selector.set_to nil
         end
 
-        rerun_crypto_selector_hook
         update
       end
     end

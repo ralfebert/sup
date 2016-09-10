@@ -167,7 +167,6 @@ protected
     super
     if @headers[@type_selector.val] != self.header
       self.header = self.header.merge @headers[@type_selector.val]
-      rerun_crypto_selector_hook
       update
     end
   end
@@ -176,7 +175,6 @@ protected
     super
     if @headers[@type_selector.val] != self.header
       self.header = self.header.merge @headers[@type_selector.val]
-      rerun_crypto_selector_hook
       update
     end
   end

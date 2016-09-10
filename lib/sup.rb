@@ -155,7 +155,7 @@ module Redwood
 
   def managers
     %w(HookManager SentManager ContactManager LabelManager AccountManager
-    DraftManager UpdateManager PollManager CryptoManager UndoManager
+    DraftManager UpdateManager PollManager UndoManager
     SourceManager SearchManager IdleManager).map { |x| Redwood.const_get x.to_sym }
   end
 
@@ -362,7 +362,6 @@ EOM
             :alternates => [],
             :sendmail => "/usr/sbin/sendmail -oem -ti",
             :signature => File.join(ENV["HOME"], ".signature"),
-            :gpgkey => ""
           }
         },
       }
@@ -434,7 +433,6 @@ require "sup/contact"
 require "sup/tagger"
 require "sup/draft"
 require "sup/poll"
-require "sup/crypto"
 require "sup/undo"
 require "sup/horizontal_selector"
 require "sup/modes/line_cursor_mode"
